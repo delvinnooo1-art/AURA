@@ -1,0 +1,111 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "App users who take quizzes",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "region": { "type": "string" },
+        "preferredLanguage": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email"]
+    },
+    "Quiz": {
+      "title": "Quiz",
+      "description": "A collection of questions",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"] },
+        "authorId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "categoryId", "difficulty"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "A single quiz question",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "type": { "type": "string", "enum": ["multiple-choice", "analytical", "long-paragraph", "math", "image"] },
+        "category": { "type": "string" },
+        "difficulty": { "type": "string" },
+        "options": { "type": "array", "items": { "type": "string" } },
+        "correctAnswer": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "explanation": { "type": "string" }
+      },
+      "required": ["text", "type"]
+    },
+    "Attempt": {
+      "title": "Attempt",
+      "description": "A user's quiz attempt",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "quizId": { "type": "string" },
+        "score": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "categoryBreakdown": { "type": "object" },
+        "performanceSummary": { "type": "string" }
+      },
+      "required": ["userId", "quizId", "score"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Quiz categories",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "slug": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "Global application settings",
+      "type": "object",
+      "properties": {
+        "translationApiKey": { "type": "string" },
+        "supportedLanguages": { "type": "array", "items": { "type": "string" } },
+        "autoTranslationEnabled": { "type": "boolean" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/quizzes/{quizId}": {
+      "schema": "Quiz",
+      "description": "Quiz data"
+    },
+    "/quizzes/{quizId}/questions/{questionId}": {
+      "schema": "Question",
+      "description": "Questions within a quiz"
+    },
+    "/attempts/{attemptId}": {
+      "schema": "Attempt",
+      "description": "Quiz attempt records"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Available categories"
+    },
+    "/config/settings": {
+      "schema": "Settings",
+      "description": "Admin settings"
+    }
+  }
+}
