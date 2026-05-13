@@ -766,6 +766,7 @@ class AuraApp {
       path
     };
     console.error('Firestore Error: ', JSON.stringify(errInfo));
+    alert(`${this.t('accessDenied') || 'Access Denied'} [${operationType}] - ${errInfo.error}`);
     throw new Error(JSON.stringify(errInfo));
   }
 
@@ -2193,6 +2194,19 @@ class AuraApp {
     const addQuestionBtn = document.getElementById('add-question');
     const liveModeInput = document.querySelector('#mode-live-online') as HTMLInputElement;
 
+    const toggleRequired = (isPlastin: boolean) => {
+       quizBuilder?.querySelectorAll('[required], .q-text, .q-correct').forEach(el => {
+          if (isPlastin) {
+             if (el.hasAttribute('required')) {
+                el.removeAttribute('required');
+                el.setAttribute('data-was-required', 'true');
+             }
+          } else if (el.getAttribute('data-was-required')) {
+             el.setAttribute('required', '');
+          }
+       });
+    };
+
     contentTypeRadios.forEach(radio => {
        radio.addEventListener('change', () => {
           const isPlastin = (radio as HTMLInputElement).value === 'plastin';
@@ -2200,6 +2214,8 @@ class AuraApp {
           plastinBuilder?.classList.toggle('hidden', !isPlastin);
           addQuestionBtn?.classList.toggle('hidden', isPlastin);
           
+          toggleRequired(isPlastin);
+
           if (isPlastin && liveModeInput) {
              liveModeInput.checked = true;
              liveModeInput.dispatchEvent(new Event('change'));
@@ -2469,9 +2485,31 @@ class AuraApp {
     document.getElementById('add-question')!.onclick = () => createQuestionCard();
     createQuestionCard();
 
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const contentType = (form.querySelector('input[name="content-type"]:checked') as HTMLInputElement).value as 'quiz' | 'plastin';
+
+      if (!auth.currentUser) {
+         if (confirm('Authentication required to sync mission to NEXUS (Cloud). Use GOOGLE IDENTITY?')) {
+            try {
+               await signInWithPopup(auth, new GoogleAuthProvider());
+            } catch (err) {
+               console.error('Auth sync failed', err);
+               alert('Authentication aborted. Mission stored locally only.');
+               return;
+            }
+         } else {
+            alert('Cloud Sync bypassed. Storing locally.');
+         }
+      }
+
+      const submitBtn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
+      const originalBtnContent = submitBtn.innerHTML;
+      try {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `<i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i> SYNCING...`;
+        createIcons({ icons });
+        
+        const contentType = (form.querySelector('input[name="content-type"]:checked') as HTMLInputElement).value as 'quiz' | 'plastin';
       const questions: Question[] = [];
       
       if (contentType === 'quiz') {
@@ -2524,17 +2562,30 @@ class AuraApp {
       };
 
       // Sync to Firestore
-      const quizRef = doc(db, 'quizzes', newQuiz.token);
-      setDoc(quizRef, newQuiz).then(() => {
-          const quizzes = JSON.parse(localStorage.getItem('aura_quizzes') || '[]');
-          quizzes.push(newQuiz);
-          localStorage.setItem('aura_quizzes', JSON.stringify(quizzes));
+        if (auth.currentUser) {
+           const quizRef = doc(db, 'quizzes', newQuiz.token);
+           await setDoc(quizRef, newQuiz);
+        } else {
+           console.warn('Sync skipped: Not authenticated');
+        }
 
-          alert('MISSION COMMITTED TO NEXUS (Cloud Synced).');
-          this.navigate(`/share/${newQuiz.token}`);
-      }).catch(err => {
-          this.handleFirestoreError(err, 'CREATE', `quizzes/${newQuiz.token}`);
-      });
+        const quizzes = JSON.parse(localStorage.getItem('aura_quizzes') || '[]');
+        quizzes.push(newQuiz);
+        localStorage.setItem('aura_quizzes', JSON.stringify(quizzes));
+
+        if (auth.currentUser) {
+           alert('MISSION COMMITTED TO NEXUS (Cloud Synced).');
+           this.navigate(`/share/${newQuiz.token}`);
+        } else {
+           alert('MISSION STORED LOCALLY. (Offline Mode - No Cloud Sync).');
+           this.navigate(`/share/${newQuiz.token}`);
+        }
+      } catch (err) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalBtnContent;
+        createIcons({ icons });
+        this.handleFirestoreError(err, 'CREATE', 'quizzes');
+      }
     });
   }
 
