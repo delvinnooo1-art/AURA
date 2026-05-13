@@ -1,6 +1,15 @@
 import './index.css';
 import { createIcons, icons } from 'lucide';
 import QRCode from 'qrcode';
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged, signInAnonymously, GoogleAuthProvider, signInWithPopup, User } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, getDocs, collection, query, where, orderBy, onSnapshot, serverTimestamp, Timestamp, limit } from 'firebase/firestore';
+import firebaseConfig from '../firebase-applet-config.json';
+
+// --- Firebase Init ---
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const auth = getAuth(app);
 
 // --- Types & Constants ---
 type Language = 'en' | 'id' | 'ja' | 'ko' | 'es' | 'fr' | 'de' | 'zh-cn' | 'zh-tw' | 'pt' | 'ar' | 'hi' | 'ru' | 'tr' | 'it' | 'th' | 'vi';
@@ -98,6 +107,22 @@ const TRANSLATIONS: Record<Language, any> = {
     difficultyHard: 'Hard',
     difficultySuperHard: 'Super Hard',
     difficultyLabel: 'Threat Level',
+    adminTitle: 'Admin Results',
+    adminDesc: 'View and track all participant metrics.',
+    lobbyMenuTitle: 'Online Lobby',
+    lobbyMenuDesc: 'Join or host live synchronized sessions.',
+    adminTokenLabel: 'Admin Access Token',
+    loginBtn: 'Initialize Access',
+    avgScore: 'Avg Score',
+    submissionsCount: 'Submissions',
+    hardestQ: 'Critical Sector',
+    easiestQ: 'Stable Sector',
+    exportSheets: 'Cloud Sync',
+    syncStatus: 'Sync Status',
+    connected: 'CONNECTED',
+    syncing: 'SYNCING',
+    offline: 'OFFLINE',
+    syncSent: 'SYNC SENT'
   },
   id: {
     title: 'AURA',
@@ -527,15 +552,27 @@ interface PlastinTile {
   label: string;
 }
 
+interface PlastinCard {
+  id: string;
+  name: string;
+  image: string | null;
+  description: string;
+  action: PlastinAction;
+  value: any;
+  templateId?: string;
+}
+
 interface PlastinConfig {
   boardImage: string | null;
   tiles: PlastinTile[];
+  cards: PlastinCard[];
   voiceEnabled: boolean;
   gameType: 'card' | 'monopoly' | 'custom';
   winCondition: string;
 }
 
 interface Quiz {
+  authorId?: string;
   id: string;
   type: 'quiz' | 'plastin';
   token: string;
@@ -611,13 +648,34 @@ class AuraApp {
     uiMode: 'laptop'
   };
   private currentPlastinTiles: PlastinTile[] = [];
+  private currentPlastinCards: PlastinCard[] = [];
   private currentBoardImage: string | null = null;
+  private user: User | null = null;
 
   constructor() {
     this.root = document.getElementById('app')!;
+    this.initFirebase();
     this.loadConfig();
     this.detectLanguage();
     this.init();
+  }
+
+  private initFirebase() {
+     onAuthStateChanged(auth, (user) => {
+        this.user = user;
+        this.updateSyncIndicator();
+     });
+  }
+
+  private updateSyncIndicator() {
+     const indicator = document.getElementById('sync-indicator');
+     if (indicator) {
+        if (this.user) {
+           indicator.innerHTML = `<span class="flex items-center gap-2 text-[8px] font-bold text-green-500 uppercase tracking-widest"><div class="w-1 h-1 bg-green-500 rounded-full animate-pulse"></div> ${this.t('connected')}</span>`;
+        } else {
+           indicator.innerHTML = `<span class="text-[8px] font-bold text-neutral-600 uppercase tracking-widest">${this.t('offline')}</span>`;
+        }
+     }
   }
 
   private loadConfig() {
@@ -650,6 +708,17 @@ class AuraApp {
 
   private init() {
     window.addEventListener('popstate', () => this.handleRoute());
+    
+    // Global navigation listener
+    document.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const nav = target.closest('[data-nav]');
+      if (nav) {
+        const path = nav.getAttribute('data-nav')!;
+        this.navigate(path);
+      }
+    });
+
     this.handleRoute();
   }
 
@@ -685,17 +754,280 @@ class AuraApp {
     }
   }
 
+  private handleFirestoreError(error: unknown, operationType: string, path: string | null) {
+    const errInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: auth.currentUser?.uid,
+        email: auth.currentUser?.email,
+        emailVerified: auth.currentUser?.emailVerified,
+      },
+      operationType,
+      path
+    };
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+    throw new Error(JSON.stringify(errInfo));
+  }
+
+  private renderAdmin() {
+     const isAdminAuthenticated = localStorage.getItem('aura_admin_auth') === 'true';
+     
+     if (!isAdminAuthenticated) {
+        return `
+          <div class="max-w-md mx-auto space-y-12 py-24 animate-slide-up">
+            <div class="text-center space-y-4">
+               <div class="w-20 h-20 bg-neutral-800 rounded-3xl mx-auto flex items-center justify-center mb-8">
+                  <i data-lucide="lock" class="w-10 h-10 text-primary"></i>
+               </div>
+               <h2 class="text-4xl font-display font-bold tracking-tighter uppercase">Nexus Authorization</h2>
+               <p class="text-neutral-500 font-medium tracking-tight uppercase">Admin Token Required</p>
+            </div>
+
+            <div class="card-premium border-primary/20 space-y-8">
+               <form id="admin-login-form" class="space-y-6">
+                  <div class="space-y-2">
+                     <label class="text-[10px] font-bold text-neutral-500 uppercase tracking-widest ml-1">${this.t('adminTokenLabel')}</label>
+                     <input type="password" id="admin-token" required class="input-premium px-8 py-5 text-xl font-mono" placeholder="••••••••"/>
+                  </div>
+                  <button type="submit" class="w-full btn-premium py-6 text-sm uppercase tracking-widest shadow-xl shadow-primary/10">${this.t('loginBtn')}</button>
+               </form>
+
+               <div class="relative">
+                  <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-neutral-800"></div></div>
+                  <div class="relative flex justify-center text-[8px] uppercase tracking-widest"><span class="bg-black px-2 text-neutral-600">Secure Protocol</span></div>
+               </div>
+
+               <button id="google-login-btn" class="w-full flex items-center justify-center gap-3 bg-white text-black py-4 rounded-xl font-bold text-xs hover:bg-neutral-200 transition-colors">
+                  <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/layout/google.svg" class="w-4 h-4"/>
+                  Login with Google for Data Sync
+               </button>
+
+               <button type="button" class="w-full btn-ghost py-2 text-[10px] uppercase tracking-widest" data-nav="/">Abort Mission</button>
+            </div>
+          </div>
+        `;
+     }
+
+     return `
+       <div class="max-w-6xl mx-auto space-y-12 w-full animate-slide-up">
+         <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div class="flex items-center gap-6">
+               <button class="btn-ghost" data-nav="/">
+                  <i data-lucide="arrow-left" class="w-4 h-4"></i>
+               </button>
+               <div>
+                  <h2 class="text-4xl font-display font-bold uppercase tracking-tighter">${this.t('adminTitle')}</h2>
+                  <p class="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mt-1">Intelligence Dashboard</p>
+               </div>
+            </div>
+            
+            <div class="flex items-center gap-4">
+               <div class="relative group">
+                  <i data-lucide="search" class="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-neutral-600 group-focus-within:text-primary transition-colors"></i>
+                  <input type="text" id="admin-search" class="bg-neutral-900 border border-neutral-800 rounded-2xl pl-12 pr-6 py-3 text-xs w-full md:w-64 focus:outline-none focus:border-primary transition-all" placeholder="Search Agents..."/>
+               </div>
+               <button class="btn-accent px-6 py-3 text-[10px]" id="refresh-results">
+                  <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+               </button>
+            </div>
+         </div>
+
+         <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div class="card-premium p-6 border-primary/20 flex flex-col items-center justify-center text-center space-y-2">
+               <div class="text-[8px] font-bold text-neutral-500 uppercase tracking-[0.3em]">Overall Accuracy</div>
+               <div class="text-4xl font-display font-bold text-primary" id="stat-accuracy">0%</div>
+            </div>
+            <div class="card-premium p-6 border-neutral-800 flex flex-col items-center justify-center text-center space-y-2">
+               <div class="text-[8px] font-bold text-neutral-500 uppercase tracking-[0.3em]">${this.t('submissionsCount')}</div>
+               <div class="text-4xl font-display font-bold text-white" id="stat-submissions">0</div>
+            </div>
+            <div class="card-premium p-6 border-neutral-800 flex flex-col items-center justify-center text-center space-y-2">
+               <div class="text-[8px] font-bold text-neutral-500 uppercase tracking-[0.3em]">${this.t('avgScore')}</div>
+               <div class="text-4xl font-display font-bold text-white" id="stat-avg-score">0</div>
+            </div>
+            <div class="card-premium p-6 border-neutral-800 flex flex-col items-center justify-center text-center space-y-2">
+               <div class="text-[8px] font-bold text-neutral-500 uppercase tracking-[0.3em]">${this.t('hardestQ')}</div>
+               <div class="text-lg font-bold text-white truncate w-full" id="stat-hardest">N/A</div>
+            </div>
+         </div>
+
+         <div class="card-premium p-0 border-neutral-800 overflow-hidden">
+            <div class="overflow-x-auto scroll-premium">
+               <table class="w-full text-left border-collapse">
+                  <thead>
+                     <tr class="border-b border-neutral-800 bg-neutral-900/50">
+                        <th class="px-6 py-4 text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Agent</th>
+                        <th class="px-6 py-4 text-[10px] font-bold text-neutral-500 uppercase tracking-widest hidden sm:table-cell">Mission</th>
+                        <th class="px-6 py-4 text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Score</th>
+                        <th class="px-6 py-4 text-[10px] font-bold text-neutral-500 uppercase tracking-widest hidden md:table-cell">Time</th>
+                        <th class="px-6 py-4 text-[10px] font-bold text-neutral-500 uppercase tracking-widest hidden lg:table-cell">Date</th>
+                        <th class="px-6 py-4 text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Action</th>
+                     </tr>
+                  </thead>
+                  <tbody id="results-table-body" class="divide-y divide-neutral-800">
+                     <!-- Results injected here -->
+                  </tbody>
+               </table>
+               <div id="results-loading" class="py-12 text-center hidden">
+                  <div class="inline-block w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4"></div>
+                  <p class="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Decrypting Records...</p>
+               </div>
+               <div id="results-empty" class="py-12 text-center text-neutral-600 uppercase font-bold text-xs tracking-widest">
+                  No mission records discovered in local sector.
+               </div>
+            </div>
+         </div>
+       </div>
+     `;
+  }
+
+  private async initAdmin(container: HTMLElement) {
+     const loginForm = container.querySelector('#admin-login-form') as HTMLFormElement;
+     if (loginForm) {
+        loginForm.onsubmit = (e) => {
+           e.preventDefault();
+           const token = (container.querySelector('#admin-token') as HTMLInputElement).value;
+           if (token === 'AURA-ADMIN-2026' || token === 'admin') { // Simple token for demo, can be improved
+              localStorage.setItem('aura_admin_auth', 'true');
+              this.handleRoute();
+           } else {
+              alert('Authorization Failed: Invalid Token.');
+           }
+        };
+        createIcons({ icons });
+
+        container.querySelector('#google-login-btn')?.addEventListener('click', async () => {
+           try {
+              const provider = new GoogleAuthProvider();
+              await signInWithPopup(auth, provider);
+              this.handleRoute(); // Refresh to check auth stats
+           } catch (err) {
+              console.error('Google Sign-in failed', err);
+              alert('Authentication Failed. Please try again.');
+           }
+        });
+        return;
+     }
+
+     const tableBody = container.querySelector('#results-table-body') as HTMLElement;
+     const loading = container.querySelector('#results-loading') as HTMLElement;
+     const empty = container.querySelector('#results-empty') as HTMLElement;
+     const searchInput = container.querySelector('#admin-search') as HTMLInputElement;
+     
+     const statsAcc = container.querySelector('#stat-accuracy') as HTMLElement;
+     const statsSub = container.querySelector('#stat-submissions') as HTMLElement;
+     const statsAvg = container.querySelector('#stat-avg-score') as HTMLElement;
+     const statsHard = container.querySelector('#stat-hardest') as HTMLElement;
+
+     let results: Attempt[] = [];
+
+     const fetchResults = async () => {
+        tableBody.innerHTML = '';
+        loading.classList.remove('hidden');
+        empty.classList.add('hidden');
+        
+        try {
+           const q = query(collection(db, 'submissions'), orderBy('completedAt', 'desc'), limit(100));
+           const querySnapshot = await getDocs(q);
+           results = querySnapshot.docs.map(doc => doc.data() as Attempt);
+           renderTable(results);
+           updateStats(results);
+        } catch (error) {
+           this.handleFirestoreError(error, 'GET', 'submissions');
+        } finally {
+           loading.classList.add('hidden');
+           if (results.length === 0) empty.classList.remove('hidden');
+        }
+     };
+
+     const renderTable = (data: Attempt[]) => {
+        tableBody.innerHTML = '';
+        data.forEach(attempt => {
+           const tr = document.createElement('tr');
+           tr.className = 'hover:bg-neutral-900/30 transition-colors group';
+           tr.innerHTML = `
+              <td class="px-6 py-5">
+                 <div class="font-bold text-sm text-white">${attempt.userName}</div>
+                 <div class="text-[10px] text-neutral-500 uppercase tracking-tight hidden sm:block">${attempt.userEmail}</div>
+              </td>
+              <td class="px-6 py-5 hidden sm:table-cell">
+                 <div class="text-xs font-bold text-neutral-300">${attempt.quizTitle}</div>
+                 <div class="text-[8px] font-mono text-neutral-600 uppercase">T-${attempt.tokenUsed}</div>
+              </td>
+              <td class="px-6 py-5">
+                 <div class="flex items-center gap-2">
+                    <div class="text-sm font-display font-bold text-primary">${attempt.score}/${attempt.maxScore}</div>
+                    <div class="text-[8px] font-bold text-neutral-600 uppercase">(${Math.round((attempt.score/attempt.maxScore)*100)}%)</div>
+                 </div>
+              </td>
+              <td class="px-6 py-5 text-xs font-mono text-neutral-400 hidden md:table-cell">${Math.floor(attempt.timeTaken / 60)}m ${attempt.timeTaken % 60}s</td>
+              <td class="px-6 py-5 text-[10px] font-mono text-neutral-500 uppercase hidden lg:table-cell">${new Date(attempt.completedAt).toLocaleDateString()}</td>
+              <td class="px-6 py-5">
+                 <button class="btn-accent px-3 py-1.5 opacity-0 group-hover:opacity-100 transition-opacity view-details" data-id="${attempt.id}">
+                    <i data-lucide="eye" class="w-3 h-3"></i>
+                 </button>
+              </td>
+           `;
+           tableBody.appendChild(tr);
+        });
+        createIcons({ icons });
+
+        tableBody.querySelectorAll('.view-details').forEach(btn => {
+           btn.addEventListener('click', () => {
+              const id = (btn as HTMLElement).getAttribute('data-id');
+              const attempt = results.find(r => r.id === id);
+              if (attempt) {
+                 alert(`AGENT INTELLIGENCE REPORT:\n\nUser: ${attempt.userName}\nScore: ${attempt.score}/${attempt.maxScore}\nAnswers: ${JSON.stringify(attempt.answers, null, 2)}`);
+              }
+           });
+        });
+     };
+
+     const updateStats = (data: Attempt[]) => {
+        if (data.length === 0) return;
+        statsSub.innerText = data.length.toString();
+        const avg = data.reduce((acc, curr) => acc + (curr.score / curr.maxScore), 0) / data.length;
+        statsAcc.innerText = `${Math.round(avg * 100)}%`;
+        const avgRaw = data.reduce((acc, curr) => acc + curr.score, 0) / data.length;
+        statsAvg.innerText = avgRaw.toFixed(1);
+        statsHard.innerText = 'Sector-04 Collision'; // Fixed for now, can be complex logic
+     };
+
+     searchInput.addEventListener('input', () => {
+        const val = searchInput.value.toLowerCase();
+        const filtered = results.filter(r => 
+           r.userName.toLowerCase().includes(val) || 
+           r.userEmail.toLowerCase().includes(val) || 
+           r.quizTitle.toLowerCase().includes(val) ||
+           r.tokenUsed.toLowerCase().includes(val)
+        );
+        renderTable(filtered);
+     });
+
+     container.querySelector('#refresh-results')?.addEventListener('click', fetchResults);
+
+     fetchResults();
+  }
+
   private async handleRoute() {
     const path = window.location.pathname;
     this.root.innerHTML = '';
-    document.body.removeAttribute('data-theme');
+    
+    // Global immersive backgrounds
+    const bg = document.createElement('div');
+    bg.className = 'fixed inset-0 tech-dots opacity-40 pointer-events-none z-0';
+    this.root.appendChild(bg);
+    
+    const lines = document.createElement('div');
+    lines.className = 'fixed inset-0 tech-lines opacity-10 pointer-events-none z-0';
+    this.root.appendChild(lines);
 
     const container = document.createElement('div');
     const isMobile = this.appUiMode === 'mobile';
     const isLaptop = this.appUiMode === 'laptop';
     const isAdaptive = this.appUiMode === 'adaptive';
     const maxWidthClass = isMobile ? 'max-w-md' : (isAdaptive ? 'max-w-full md:max-w-5xl lg:max-w-7xl' : 'max-w-7xl');
-    container.className = `flex-1 flex flex-col justify-center mx-auto px-4 sm:px-8 py-12 w-full animate-slide-up ${maxWidthClass}`;
+    container.className = `flex-1 flex flex-col justify-center mx-auto px-4 md:px-12 py-8 md:py-24 w-full relative z-10 animate-slide-up ${maxWidthClass}`;
 
     if (path === '/') {
       container.innerHTML = this.renderHome();
@@ -705,10 +1037,34 @@ class AuraApp {
       container.innerHTML = this.renderJoin();
     } else if (path === '/settings') {
       container.innerHTML = this.renderSettings();
+    } else if (path === '/admin') {
+       container.innerHTML = this.renderAdmin();
+       this.root.appendChild(container);
+       this.initAdmin(container);
+       createIcons({ icons });
+       return;
     } else if (path.startsWith('/play/')) {
       const token = path.split('/').pop()!;
+      let quiz: Quiz | null = null;
+      
       const quizzes: Quiz[] = JSON.parse(localStorage.getItem('aura_quizzes') || '[]');
-      const quiz = quizzes.find(q => q.token === token);
+      quiz = quizzes.find(q => q.token === token) || null;
+
+      if (!quiz) {
+         // Attempt cloud fetch
+         try {
+            const docSnap = await getDoc(doc(db, 'quizzes', token));
+            if (docSnap.exists()) {
+               quiz = docSnap.data() as Quiz;
+               // Cache locally
+               quizzes.push(quiz);
+               localStorage.setItem('aura_quizzes', JSON.stringify(quizzes));
+            }
+         } catch (e) {
+            console.error('Cloud fetch failed', e);
+         }
+      }
+
       const urlParams = new URLSearchParams(window.location.search);
       const isDirect = urlParams.get('direct') === 'true';
 
@@ -750,38 +1106,71 @@ class AuraApp {
            </button>
         </div>
 
-        <div class="space-y-4">
-          <div class="inline-block p-4 bg-white rounded-2xl mb-4 cursor-pointer" data-nav="/settings">
-             <span class="text-black font-display font-bold text-3xl">A</span>
+        <div class="space-y-6">
+          <div class="inline-block p-5 bg-white rounded-3xl mb-4 cursor-pointer shadow-2xl shadow-white/10 hover:scale-110 transition-transform active:scale-95" data-nav="/settings">
+             <span class="text-black font-display font-bold text-4xl">A</span>
           </div>
-          <h1 class="text-7xl font-display font-bold tracking-tighter uppercase">${this.t('title')}</h1>
-          <p class="text-xl text-neutral-500 font-medium tracking-wide uppercase">${this.t('subtitle')}</p>
+          <h1 class="text-7xl font-display font-bold tracking-tighter uppercase leading-[0.85]">${this.t('title')}</h1>
+          <p class="text-sm md:text-xl text-neutral-500 font-bold tracking-[0.4em] uppercase opacity-80">${this.t('subtitle')}</p>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-          <div class="card-action group" data-nav="/create">
-            <div class="w-20 h-20 bg-neutral-800 rounded-2xl flex items-center justify-center group-hover:bg-white group-hover:text-black transition-all">
-              <i data-lucide="plus" class="w-10 h-10"></i>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8 max-w-5xl mx-auto px-2">
+          <div class="card-action group relative overflow-hidden" data-nav="/create">
+            <div class="w-16 h-16 md:w-20 md:h-20 bg-neutral-800 rounded-2xl flex items-center justify-center group-hover:bg-white group-hover:text-black transition-all shadow-xl">
+              <i data-lucide="plus" class="w-8 h-8 md:w-10 md:h-10"></i>
             </div>
-            <div class="space-y-2">
-              <h3 class="text-3xl font-display font-bold uppercase">${this.t('createTitle')}</h3>
-              <p class="text-neutral-500 text-sm font-medium tracking-tight">${this.t('createDesc')}</p>
+            <div class="space-y-2 text-left flex-1">
+              <h3 class="text-2xl md:text-3xl font-display font-bold uppercase leading-none tracking-tight">${this.t('createTitle')}</h3>
+              <p class="text-neutral-500 text-xs md:text-sm font-medium tracking-tight opacity-80">${this.t('createDesc')}</p>
+            </div>
+            <div class="absolute right-8 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-hover:translate-x-2 transition-all hidden md:block">
+               <i data-lucide="chevron-right" class="w-6 h-6 text-white/40"></i>
             </div>
           </div>
 
-          <div class="card-action group" data-nav="/join">
-            <div class="w-20 h-20 bg-neutral-800 rounded-2xl flex items-center justify-center group-hover:bg-white group-hover:text-black transition-all">
-              <i data-lucide="key" class="w-10 h-10"></i>
+          <div class="card-action group relative overflow-hidden" data-nav="/join">
+            <div class="w-16 h-16 md:w-20 md:h-20 bg-neutral-800 rounded-2xl flex items-center justify-center group-hover:bg-white group-hover:text-black transition-all shadow-xl">
+              <i data-lucide="key" class="w-8 h-8 md:w-10 md:h-10"></i>
             </div>
-            <div class="space-y-2">
-              <h3 class="text-3xl font-display font-bold uppercase">${this.t('joinTitle')}</h3>
-              <p class="text-neutral-500 text-sm font-medium tracking-tight">${this.t('joinDesc')}</p>
+            <div class="space-y-2 text-left flex-1">
+               <h3 class="text-2xl md:text-3xl font-display font-bold uppercase leading-none tracking-tight">${this.t('joinTitle')}</h3>
+               <p class="text-neutral-500 text-xs md:text-sm font-medium tracking-tight opacity-80">${this.t('joinDesc')}</p>
+            </div>
+            <div class="absolute right-8 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-hover:translate-x-2 transition-all hidden md:block">
+               <i data-lucide="chevron-right" class="w-6 h-6 text-white/40"></i>
+            </div>
+          </div>
+
+          <div class="card-action group relative overflow-hidden" data-nav="/join">
+            <div class="w-16 h-16 md:w-20 md:h-20 bg-neutral-800 rounded-2xl flex items-center justify-center group-hover:bg-emerald-500 group-hover:text-black transition-all shadow-xl text-emerald-500">
+              <i data-lucide="zap" class="w-8 h-8 md:w-10 md:h-10"></i>
+            </div>
+            <div class="space-y-2 text-left flex-1">
+               <h3 class="text-2xl md:text-3xl font-display font-bold uppercase leading-none tracking-tight">${this.t('lobbyMenuTitle')}</h3>
+               <p class="text-neutral-500 text-xs md:text-sm font-medium tracking-tight opacity-80">${this.t('lobbyMenuDesc')}</p>
+            </div>
+            <div class="absolute right-8 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-hover:translate-x-2 transition-all hidden md:block">
+               <i data-lucide="chevron-right" class="w-6 h-6 text-white/40"></i>
+            </div>
+          </div>
+
+          <div class="card-action group relative overflow-hidden" data-nav="/admin">
+            <div class="w-16 h-16 md:w-20 md:h-20 bg-neutral-800 rounded-2xl flex items-center justify-center group-hover:bg-primary group-hover:text-black transition-all shadow-xl text-neutral-400">
+              <i data-lucide="bar-chart-3" class="w-8 h-8 md:w-10 md:h-10"></i>
+            </div>
+            <div class="space-y-2 text-left flex-1">
+               <h3 class="text-2xl md:text-3xl font-display font-bold uppercase leading-none tracking-tight">${this.t('adminTitle')}</h3>
+               <p class="text-neutral-500 text-xs md:text-sm font-medium tracking-tight opacity-80">${this.t('adminDesc')}</p>
+            </div>
+            <div class="absolute right-8 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-hover:translate-x-2 transition-all hidden md:block">
+               <i data-lucide="chevron-right" class="w-6 h-6 text-white/40"></i>
             </div>
           </div>
         </div>
         
-        <div class="pt-8">
-           <button class="btn-ghost mx-auto" data-nav="/settings">
+        <div class="pt-8 flex flex-col items-center gap-4">
+           <div id="sync-indicator"></div>
+           <button class="btn-ghost" data-nav="/settings">
               <i data-lucide="settings" class="w-4 h-4"></i> ${this.t('settingsTitle')}
            </button>
         </div>
@@ -1123,6 +1512,43 @@ class AuraApp {
              <div id="tiles-inventory" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 <!-- Tile rule cards will appear here -->
              </div>
+
+             <div class="card-premium border-primary/10">
+                <div class="flex items-center justify-between mb-8">
+                   <h3 class="text-xs font-bold text-neutral-400 uppercase tracking-[0.2em] flex items-center gap-2">
+                       <i data-lucide="layers" class="w-4 h-4"></i> Card Deck Management
+                   </h3>
+                   <button type="button" id="add-plastin-card" class="btn-accent px-4 py-2 text-[10px] uppercase tracking-widest border-primary/20 hover:bg-primary/10">
+                      <i data-lucide="plus" class="w-3 h-3 mr-2"></i> Add Strategy Card
+                   </button>
+                </div>
+                
+                <div id="cards-inventory" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                   <!-- Plastin cards will appear here -->
+                </div>
+                
+                <div id="card-templates" class="mt-8 border-t border-neutral-800 pt-8">
+                   <label class="text-[10px] font-bold text-neutral-500 uppercase tracking-widest ml-1 mb-4 block">Quick Templates</label>
+                   <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <button type="button" class="template-btn p-4 bg-neutral-900 border border-neutral-800 rounded-xl hover:border-primary transition-all text-left group" data-template="chance">
+                         <div class="text-xs font-bold text-neutral-200 group-hover:text-primary transition-colors">Chance Matrix</div>
+                         <div class="text-[8px] text-neutral-600 uppercase">Random Effects</div>
+                      </button>
+                      <button type="button" class="template-btn p-4 bg-neutral-900 border border-neutral-800 rounded-xl hover:border-primary transition-all text-left group" data-template="boost">
+                         <div class="text-xs font-bold text-neutral-200 group-hover:text-primary transition-colors">Speed Boost</div>
+                         <div class="text-[8px] text-neutral-600 uppercase">Movement Buffs</div>
+                      </button>
+                      <button type="button" class="template-btn p-4 bg-neutral-900 border border-neutral-800 rounded-xl hover:border-primary transition-all text-left group" data-template="trap">
+                         <div class="text-xs font-bold text-neutral-200 group-hover:text-primary transition-colors">Quantum Trap</div>
+                         <div class="text-[8px] text-neutral-600 uppercase">State Penalties</div>
+                      </button>
+                      <button type="button" class="template-btn p-4 bg-neutral-900 border border-neutral-800 rounded-xl hover:border-primary transition-all text-left group" data-template="combat">
+                         <div class="text-xs font-bold text-neutral-200 group-hover:text-primary transition-colors">Direct Conflict</div>
+                         <div class="text-[8px] text-neutral-600 uppercase">Player Interaction</div>
+                      </button>
+                   </div>
+                </div>
+             </div>
           </div>
 
           <div id="questions-list" class="space-y-6">
@@ -1371,10 +1797,6 @@ class AuraApp {
   }
 
   private bindEvents(container: HTMLElement) {
-    container.querySelectorAll('[data-nav]').forEach(el => {
-      el.addEventListener('click', () => this.navigate(el.getAttribute('data-nav')!));
-    });
-
     container.querySelectorAll('[data-uimode]').forEach(el => {
       el.addEventListener('click', () => {
         const mode = el.getAttribute('data-uimode') as 'laptop' | 'mobile' | 'adaptive';
@@ -1483,6 +1905,7 @@ class AuraApp {
 
   private initPlastinBuilder(container: HTMLElement) {
      this.currentPlastinTiles = [];
+     this.currentPlastinCards = [];
      this.currentBoardImage = null;
      
      const dropzone = container.querySelector('#board-image-dropzone') as HTMLElement;
@@ -1494,6 +1917,9 @@ class AuraApp {
      const tilesLayer = container.querySelector('#tiles-layer') as HTMLElement;
      const inventory = container.querySelector('#tiles-inventory') as HTMLElement;
      const tileCount = container.querySelector('#tile-count') as HTMLElement;
+     const cardsInventory = container.querySelector('#cards-inventory') as HTMLElement;
+     const addCardBtn = container.querySelector('#add-plastin-card') as HTMLButtonElement;
+     const templateBtns = container.querySelectorAll('.template-btn');
 
      const updateUI = () => {
         tilesLayer.innerHTML = '';
@@ -1566,6 +1992,138 @@ class AuraApp {
         tileCount.innerText = `${this.currentPlastinTiles.length} Nodes`;
         createIcons({ icons });
      };
+
+     const updateCardsUI = () => {
+        cardsInventory.innerHTML = '';
+        this.currentPlastinCards.forEach((card, index) => {
+           const cardEl = document.createElement('div');
+           cardEl.className = 'card-premium border-neutral-800/50 p-4 space-y-4 animate-slide-up group/card';
+           cardEl.innerHTML = `
+              <div class="relative aspect-[3/4] bg-neutral-950 rounded-xl border border-neutral-800 p-4 flex flex-col justify-between overflow-hidden">
+                 ${card.image ? `<img src="${card.image}" class="absolute inset-0 w-full h-full object-cover opacity-60"/>` : ''}
+                 <div class="relative z-10 flex flex-col h-full justify-between">
+                    <div class="flex justify-between items-start">
+                       <div class="text-[8px] font-bold text-primary uppercase tracking-[0.2em] bg-black/80 px-2 py-1 rounded-full">${card.action.toUpperCase()}</div>
+                       <button type="button" class="remove-card text-neutral-500 hover:text-red-500 transition-colors bg-black/60 p-1 rounded-lg">
+                          <i data-lucide="trash-2" class="w-3 h-3"></i>
+                       </button>
+                    </div>
+                    <div class="space-y-1 text-left">
+                       <input type="text" class="bg-black/60 border border-white/10 rounded px-2 py-1 focus:outline-none font-bold text-[10px] text-white w-full c-name" value="${card.name}" placeholder="Card Name"/>
+                       <textarea class="bg-black/60 border border-white/10 rounded px-2 py-1 focus:outline-none text-[8px] text-neutral-400 w-full resize-none c-desc" rows="2" placeholder="Description">${card.description}</textarea>
+                    </div>
+                    <div class="flex justify-between items-center gap-2">
+                       <select class="bg-black/80 border border-white/10 rounded-lg px-2 py-1 text-[8px] w-full text-neutral-400 c-action">
+                          <option value="none" ${card.action === 'none' ? 'selected' : ''}>None</option>
+                          <option value="move" ${card.action === 'move' ? 'selected' : ''}>Move</option>
+                          <option value="skip" ${card.action === 'skip' ? 'selected' : ''}>Skip</option>
+                          <option value="draw" ${card.action === 'draw' ? 'selected' : ''}>Draw</option>
+                          <option value="penalty" ${card.action === 'penalty' ? 'selected' : ''}>Penalty</option>
+                          <option value="bonus" ${card.action === 'bonus' ? 'selected' : ''}>Bonus</option>
+                       </select>
+                       <input type="text" class="bg-black/80 border border-white/10 rounded-lg px-2 py-1 text-[8px] w-12 text-neutral-300 c-value" value="${card.value}" placeholder="+2"/>
+                    </div>
+                    <div class="mt-2 flex gap-1">
+                       <button type="button" class="flex-1 bg-black/80 hover:bg-white/10 text-[6px] uppercase tracking-widest py-1 border border-white/5 rounded c-photo-btn">Custom Photo</button>
+                    </div>
+                    <input type="file" class="hidden c-photo-input" accept="image/*"/>
+                 </div>
+              </div>
+           `;
+           
+           cardEl.querySelector('.c-name')?.addEventListener('input', (e) => {
+              card.name = (e.target as HTMLInputElement).value;
+           });
+           cardEl.querySelector('.c-desc')?.addEventListener('input', (e) => {
+              card.description = (e.target as HTMLTextAreaElement).value;
+           });
+           cardEl.querySelector('.c-action')?.addEventListener('change', (e) => {
+              card.action = (e.target as HTMLSelectElement).value as PlastinAction;
+              updateCardsUI();
+           });
+           cardEl.querySelector('.c-value')?.addEventListener('input', (e) => {
+              card.value = (e.target as HTMLInputElement).value;
+           });
+           cardEl.querySelector('.remove-card')?.addEventListener('click', () => {
+              this.currentPlastinCards = this.currentPlastinCards.filter(c => c.id !== card.id);
+              updateCardsUI();
+           });
+           
+           const photoInput = cardEl.querySelector('.c-photo-input') as HTMLInputElement;
+           cardEl.querySelector('.c-photo-btn')?.addEventListener('click', () => photoInput.click());
+           photoInput.addEventListener('change', (e) => {
+              const file = (e.target as HTMLInputElement).files?.[0];
+              if (file) {
+                 const reader = new FileReader();
+                 reader.onload = (re) => {
+                    card.image = re.target?.result as string;
+                    updateCardsUI();
+                 };
+                 reader.readAsDataURL(file);
+              }
+           });
+
+           cardsInventory.appendChild(cardEl);
+        });
+        createIcons({ icons });
+     };
+
+     addCardBtn.addEventListener('click', () => {
+        if (this.currentPlastinCards.length >= 1000) {
+           alert('Deck capacity reached (1000 cards max)');
+           return;
+        }
+        const newCard: PlastinCard = {
+           id: 'card_' + Date.now() + Math.random(),
+           name: 'New Strategy Card',
+           description: 'Action briefing details...',
+           image: null,
+           action: 'none',
+           value: ''
+        };
+        this.currentPlastinCards.push(newCard);
+        updateCardsUI();
+     });
+
+     templateBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+           const type = btn.getAttribute('data-template');
+           let tCards: Partial<PlastinCard>[] = [];
+           if (type === 'chance') {
+              tCards = [
+                 { name: 'Luck Factor', description: 'Advance 2 units in vector field', action: 'move', value: '2' },
+                 { name: 'System Glitch', description: 'Wait for recovery protocol', action: 'skip', value: '1' }
+              ];
+           } else if (type === 'boost') {
+              tCards = [
+                 { name: 'Nitro Core', description: 'Instant advance 6 units', action: 'move', value: '6' },
+                 { name: 'Bonus Credits', description: 'Gained +1000 Score units', action: 'bonus', value: '1000' }
+              ];
+           } else if (type === 'trap') {
+              tCards = [
+                 { name: 'Malware Spike', description: 'Penalty -500 Score units', action: 'penalty', value: '500' },
+                 { name: 'Quantum Drift', description: 'Reverse 3 units in vector', action: 'move', value: '-3' }
+              ];
+           } else if (type === 'combat') {
+              tCards = [
+                 { name: 'EMP Jammer', description: 'Disable target protocol', action: 'skip', value: '1' },
+                 { name: 'Resource Hack', description: 'Extract +200 Score units', action: 'bonus', value: '200' }
+              ];
+           }
+           
+           tCards.forEach(tc => {
+              this.currentPlastinCards.push({
+                 id: 'card_' + Date.now() + Math.random(),
+                 name: tc.name!,
+                 description: tc.description!,
+                 image: null,
+                 action: tc.action!,
+                 value: tc.value!
+              });
+           });
+           updateCardsUI();
+        });
+     });
 
      dropzone.addEventListener('click', () => fileInput.click());
      fileInput.addEventListener('change', (e) => {
@@ -1955,20 +2513,28 @@ class AuraApp {
         plastin: contentType === 'plastin' ? {
            boardImage: this.currentBoardImage,
            tiles: this.currentPlastinTiles,
+           cards: this.currentPlastinCards,
            voiceEnabled: (form.querySelector('#plastin-voice-enabled') as HTMLInputElement).checked,
            gameType: (form.querySelector('#plastin-game-type') as HTMLSelectElement).value as any,
            winCondition: 'Objective: Reach the final node.'
         } : undefined,
         language: this.lang,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        authorId: auth.currentUser?.uid || 'anonymous'
       };
 
-      const quizzes = JSON.parse(localStorage.getItem('aura_quizzes') || '[]');
-      quizzes.push(newQuiz);
-      localStorage.setItem('aura_quizzes', JSON.stringify(quizzes));
+      // Sync to Firestore
+      const quizRef = doc(db, 'quizzes', newQuiz.token);
+      setDoc(quizRef, newQuiz).then(() => {
+          const quizzes = JSON.parse(localStorage.getItem('aura_quizzes') || '[]');
+          quizzes.push(newQuiz);
+          localStorage.setItem('aura_quizzes', JSON.stringify(quizzes));
 
-      alert('MISSION COMMITTED TO NEXUS.');
-      this.navigate(`/share/${newQuiz.token}`);
+          alert('MISSION COMMITTED TO NEXUS (Cloud Synced).');
+          this.navigate(`/share/${newQuiz.token}`);
+      }).catch(err => {
+          this.handleFirestoreError(err, 'CREATE', `quizzes/${newQuiz.token}`);
+      });
     });
   }
 
@@ -2058,7 +2624,6 @@ class AuraApp {
   }
 
   private renderLobby(quiz: Quiz) {
-    const playersJoined = Math.floor(Math.random() * 15) + 5; // Simulated
     return `
       <div class="max-w-2xl mx-auto space-y-12 py-12 text-center animate-slide-up">
         <div class="space-y-8">
@@ -2074,11 +2639,11 @@ class AuraApp {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
            <div class="card-premium border-white/5 space-y-4">
               <div class="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">${this.t('playersJoined')}</div>
-              <div class="text-6xl font-display font-bold text-white tabular-nums">${playersJoined}</div>
+              <div class="text-6xl font-display font-bold text-white tabular-nums">0</div>
            </div>
            <div class="card-premium border-white/5 space-y-4">
               <div class="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Protocol Status</div>
-              <div class="text-xl font-display font-bold text-primary uppercase animate-pulse">Synchronizing...</div>
+              <div class="text-xl font-display font-bold text-primary uppercase animate-pulse protocol-status-label">Synchronizing...</div>
            </div>
         </div>
 
@@ -2094,20 +2659,54 @@ class AuraApp {
     `;
   }
 
-  private initLobby(container: HTMLElement, quiz: Quiz) {
-     const startBtn = container.querySelector('#start-mission-demo');
+  private async initLobby(container: HTMLElement, quiz: Quiz) {
+     const startBtn = container.querySelector('#start-mission-demo') as HTMLButtonElement;
+     const playersLabel = container.querySelector('.players-joined-count') || { innerText: '' };
+     const statusLabel = container.querySelector('.protocol-status-label') || { innerText: '' };
+     
+     const lobbyRef = doc(db, 'lobbies', quiz.token);
+     
+     // Initialize lobby on join if it doesn't exist
+     const initLobbyState = async () => {
+        const snap = await getDoc(lobbyRef);
+        const name = this.user?.displayName || localStorage.getItem('aura_nickname') || 'Agent_' + Math.floor(Math.random()*1000);
+        const playerKey = name.replace(/[^a-zA-Z0-9]/g, '_');
+        if (!snap.exists()) {
+           await setDoc(lobbyRef, {
+              status: 'waiting',
+              currentQuestionIndex: -1,
+              players: { [playerKey]: true },
+              startTime: null
+           });
+        } else {
+           await setDoc(lobbyRef, {
+              players: { [playerKey]: true }
+           }, { merge: true });
+        }
+     };
+     
+     initLobbyState();
+
+     // Listen for updates
+     const unsubscribe = onSnapshot(lobbyRef, (doc) => {
+        if (!doc.exists()) return;
+        const data = doc.data();
+        
+        if (data.status === 'started') {
+           unsubscribe();
+           this.navigate(`/play/${quiz.token}?direct=true`);
+        }
+        
+        // Update UI (players joined etc)
+        const players = Object.keys(data.players || {}).length;
+        const countEl = container.querySelector('.tabular-nums');
+        if (countEl) countEl.textContent = players.toString();
+     });
+
      if (startBtn) {
-        startBtn.addEventListener('click', () => {
-           let countdown = 3;
-           (startBtn as HTMLButtonElement).disabled = true;
-           const interval = setInterval(() => {
-              startBtn.innerHTML = `<span class="text-4xl text-white font-display">${countdown}</span>`;
-              if (countdown <= 0) {
-                 clearInterval(interval);
-                 this.navigate(`/play/${quiz.token}?direct=true`);
-              }
-              countdown--;
-           }, 1000);
+        startBtn.addEventListener('click', async () => {
+           startBtn.disabled = true;
+           await setDoc(lobbyRef, { status: 'started' }, { merge: true });
         });
      }
   }
@@ -2211,6 +2810,13 @@ class AuraApp {
                </div>
             </div>
          </div>
+
+         <!-- Card Drawn Modal -->
+         <div id="card-drawn-modal" class="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex items-center justify-center p-6 scale-0 opacity-0 transition-all duration-500 pointer-events-none">
+            <div id="card-drawn-content" class="w-full max-w-[320px] animate-slide-up">
+               <!-- Card content injected here -->
+            </div>
+         </div>
        </div>
      `;
   }
@@ -2229,6 +2835,8 @@ class AuraApp {
      const actionLog = container.querySelector('#game-action-log') as HTMLElement;
      const activePlayers = container.querySelector('#active-players') as HTMLElement;
      const turnInfo = container.querySelector('#game-turn-info') as HTMLElement;
+     const cardModal = container.querySelector('#card-drawn-modal') as HTMLElement;
+     const cardContent = container.querySelector('#card-drawn-content') as HTMLElement;
 
      let turnCount = 1;
      let currentPlayerPos = 0; // Index in tiles
@@ -2275,27 +2883,93 @@ class AuraApp {
         `;
      };
 
+     const drawCard = () => {
+        const deck = quiz.plastin?.cards || [];
+        if (deck.length === 0) {
+           log(`Deck Warning: No strategy cards configured for this field.`, 'system');
+           return;
+        }
+        
+        const card = deck[Math.floor(Math.random() * deck.length)];
+        log(`Strategy Intercept: ${card.name}`, 'player');
+        
+        cardContent.innerHTML = `
+           <div class="card-premium bg-neutral-900 border-primary/20 p-1 space-y-6 shadow-2xl relative overflow-hidden group">
+              <div class="relative aspect-[3/4] bg-neutral-950 rounded-2xl overflow-hidden border border-white/5">
+                 ${card.image ? `<img src="${card.image}" class="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:scale-110 transition-transform duration-1000"/>` : ''}
+                 <div class="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent"></div>
+                 
+                 <div class="absolute inset-0 p-6 flex flex-col justify-between">
+                    <div class="flex justify-between items-start">
+                       <div class="badge-premium bg-primary text-black border-none font-black text-[8px] tracking-[0.2em]">${card.action.toUpperCase()}</div>
+                       <i data-lucide="zap" class="w-6 h-6 text-primary animate-pulse"></i>
+                    </div>
+                    
+                    <div class="space-y-2">
+                       <h3 class="text-3xl font-display font-black uppercase leading-none tracking-tighter text-white">${card.name}</h3>
+                       <p class="text-[10px] text-neutral-400 font-medium leading-relaxed">${card.description}</p>
+                       <div class="pt-4 flex items-center justify-between border-t border-white/10">
+                          <span class="text-[8px] font-bold text-neutral-500 uppercase tracking-widest">Effect Scalar</span>
+                          <span class="text-xl font-display font-bold text-primary">${card.value || 'N/D'}</span>
+                       </div>
+                    </div>
+                 </div>
+              </div>
+              
+              <button id="close-card" class="w-full btn-premium py-4 font-bold uppercase tracking-[0.2em] text-[10px] relative z-10 transition-all hover:letter-spacing-widest">Execute Strategy</button>
+           </div>
+        `;
+        
+        cardModal.classList.remove('scale-0', 'opacity-0', 'pointer-events-none');
+        createIcons({ icons });
+        
+        const closeBtn = cardContent.querySelector('#close-card');
+        closeBtn?.addEventListener('click', () => {
+           cardModal.classList.add('scale-0', 'opacity-0', 'pointer-events-none');
+           
+           if (card.action === 'move') {
+              const shift = parseInt(card.value) || 0;
+              currentPlayerPos = Math.max(0, (currentPlayerPos + shift) % (tiles.length || 1));
+              log(`Deployed: Moving ${shift} nodes in field`, 'action');
+              renderGameUI();
+           } else if (card.action === 'bonus') {
+              log(`Deployed: Data bonus +${card.value} Score Units`, 'action');
+           } else if (card.action === 'penalty') {
+              log(`Deployed: Integrity penalty -${card.value} Score Units`, 'action');
+           } else if (card.action === 'skip') {
+              log(`Deployed: Protocol delay for next sequence`, 'action');
+           }
+        });
+     };
+
      rollBtn.onclick = () => {
         rollBtn.disabled = true;
         diceDisplay.classList.remove('scale-0');
         diceDisplay.classList.add('scale-150', 'animate-bounce');
         
-        log(`Rolling probability matrix...`, 'system');
+        log(`Initiating RNG sequence...`, 'system');
         
         setTimeout(() => {
            const roll = Math.floor(Math.random() * 6) + 1;
            diceDisplay.innerText = roll.toString();
            diceDisplay.classList.remove('animate-bounce');
            
-           log(`${user.name} rolled a ${roll}`, 'player');
+           log(`Operator rolled ${roll}`, 'player');
            
            setTimeout(() => {
               currentPlayerPos = (currentPlayerPos + roll) % (tiles.length || 1);
               const destination = tiles[currentPlayerPos];
-              log(`Moving to ${destination?.label || 'Unknown Sector'}`, 'action');
+              log(`Relocating to ${destination?.label || 'Undefined Sector'}`, 'action');
               
               if (destination?.action && destination.action !== 'none') {
-                 log(`Tile Effect Activated: ${destination.action.toUpperCase()} (${destination.value})`, 'system');
+                 log(`Action Lock: ${destination.action.toUpperCase()} activated`, 'system');
+                 if (destination.action === 'draw') {
+                    drawCard();
+                 } else if (destination.action === 'move') {
+                    const shift = parseInt(destination.value) || 0;
+                    currentPlayerPos = Math.max(0, (currentPlayerPos + shift) % (tiles.length || 1));
+                    log(`Jump Protocol: Shifting ${shift} nodes`, 'action');
+                 }
               }
 
               renderGameUI();
@@ -2541,6 +3215,11 @@ class AuraApp {
       if (!attemptsByEmail[user.email]) attemptsByEmail[user.email] = [];
       attemptsByEmail[user.email].push(newAttempt);
       localStorage.setItem('aura_attempts_by_email', JSON.stringify(attemptsByEmail));
+
+      // Sync to Cloud
+      setDoc(doc(db, 'submissions', newAttempt.id), newAttempt).catch(err => {
+         console.error('Cloud Sync Failed', err);
+      });
       
       await this.sendToGoogleSheets(newAttempt, quiz);
       this.navigate(`/result/${newAttempt.id}`);

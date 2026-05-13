@@ -35,31 +35,50 @@
   .hero-gradient {
     background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.03) 0%, transparent 70%);
   }
+
+  .tech-dots {
+    background-image: radial-gradient(circle at 2px 2px, rgba(255,255,255,0.03) 1px, transparent 0);
+    background-size: 24px 24px;
+  }
+
+  .tech-lines {
+    background-image: linear-gradient(rgba(255,255,255,0.01) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.01) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
 }
 
 @layer components {
   .btn-premium {
-    @apply px-6 md:px-8 py-3 md:py-4 bg-white text-black rounded-xl md:rounded-2xl font-bold transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 md:gap-3 text-sm md:text-base shadow-xl shadow-white/10;
+    @apply px-6 md:px-8 py-3 md:py-4 bg-white text-black rounded-xl md:rounded-2xl font-bold transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-50 flex items-center justify-center gap-2 md:gap-3 text-sm md:text-base shadow-xl shadow-white/10 select-none;
   }
   
   .btn-accent {
-    @apply px-6 md:px-8 py-3 md:py-4 bg-neutral-900 text-white rounded-xl md:rounded-2xl font-bold transition-all hover:bg-neutral-800 active:scale-95 flex items-center justify-center gap-2 md:gap-3 border border-neutral-800 text-sm md:text-base;
+    @apply px-6 md:px-8 py-3 md:py-4 bg-neutral-900 text-white rounded-xl md:rounded-2xl font-bold transition-all hover:bg-neutral-800 active:scale-95 flex items-center justify-center gap-2 md:gap-3 border border-neutral-800 text-sm md:text-base select-none;
   }
 
   .btn-ghost {
-    @apply px-4 py-2 text-neutral-400 rounded-xl font-medium transition-all hover:text-white hover:bg-white/5 active:scale-95 flex items-center justify-center gap-2 text-sm;
+    @apply px-4 py-2 text-neutral-400 rounded-xl font-medium transition-all hover:text-white hover:bg-white/5 active:scale-95 flex items-center justify-center gap-2 text-sm select-none;
   }
 
   .card-action {
-    @apply bg-neutral-900/40 border border-neutral-800/60 rounded-3xl p-8 md:p-12 backdrop-blur-xl transition-all hover:border-white/20 hover:bg-neutral-900/60 hover:scale-[1.02] cursor-pointer flex flex-col items-center text-center space-y-4 md:space-y-6;
+    @apply bg-neutral-900/40 border border-neutral-800/60 rounded-3xl p-6 md:p-10 backdrop-blur-3xl transition-all hover:border-white/20 hover:bg-neutral-900/60 hover:shadow-2xl hover:shadow-white/5 cursor-pointer flex items-center gap-6 relative overflow-hidden;
+  }
+
+  .card-action::before {
+    content: '';
+    @apply absolute inset-0 bg-white/5 opacity-0 transition-opacity;
+  }
+  
+  .card-action:hover::before {
+    @apply opacity-100;
   }
 
   .card-premium {
-    @apply bg-neutral-900/40 border border-neutral-800/60 rounded-2xl md:rounded-3xl p-6 md:p-8 backdrop-blur-xl transition-all hover:border-neutral-700 hover:bg-neutral-900/60;
+    @apply bg-neutral-900/40 border border-neutral-800/60 rounded-2xl md:rounded-3xl p-6 md:p-8 backdrop-blur-3xl transition-all hover:border-neutral-700 hover:bg-neutral-900/60;
   }
 
   .card-question {
-    @apply bg-neutral-900/40 border border-neutral-800/40 rounded-2xl md:rounded-3xl p-6 md:p-8 mb-6 md:mb-8 backdrop-blur-xl shadow-lg transition-all focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/5;
+    @apply bg-neutral-900/40 border border-neutral-800/40 rounded-2xl md:rounded-3xl p-6 md:p-8 mb-6 md:mb-8 backdrop-blur-3xl shadow-lg transition-all focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/5;
   }
 
   .input-premium {
@@ -71,7 +90,17 @@
   }
 
   .glass-header {
-    @apply sticky top-0 z-40 bg-black/60 backdrop-blur-2xl border-b border-neutral-900/80;
+    @apply sticky top-0 z-40 bg-black/60 backdrop-blur-2xl border-b border-neutral-900/80 px-4 md:px-8;
+  }
+
+  .scroll-premium::-webkit-scrollbar {
+    @apply w-1.5 h-1.5;
+  }
+  .scroll-premium::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .scroll-premium::-webkit-scrollbar-thumb {
+    @apply bg-neutral-800 rounded-full hover:bg-neutral-700;
   }
 
   .fab {
@@ -91,14 +120,20 @@
   }
 
   /* Mobile Specific Fixes */
-  @media (max-width: 640px) {
-    .text-7xl { @apply text-5xl; }
-    .text-5xl { @apply text-4xl; }
-    .text-4xl { @apply text-3xl; }
-    .text-3xl { @apply text-2xl; }
+  @media (max-width: 768px) {
+    .text-7xl { font-size: clamp(2.5rem, 10vw, 4.5rem); }
+    .text-5xl { font-size: clamp(2rem, 8vw, 3rem); }
     
-    .card-action, .card-premium, .card-question {
-      @apply rounded-xl;
+    .card-action {
+      @apply p-6 flex-col text-center;
+    }
+
+    .card-action i {
+      @apply w-8 h-8;
+    }
+
+    .card-action .w-20 {
+      @apply w-16 h-16;
     }
 
     .fab {

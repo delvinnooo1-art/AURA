@@ -1,69 +1,48 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default deny
+    // 0. Default Deny
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
+    // --- Helpers ---
     function isSignedIn() { return request.auth != null; }
-    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
-    function isAdmin() { return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isAdmin() { return isSignedIn() && (request.auth.token.email == 'delvinnooo1@gmail.com' && request.auth.token.email_verified == true); }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128; }
 
-    // User profiles
-    match /users/{userId} {
-      function isValidUser(data) {
-        return data.keys().hasAll(['name', 'email', 'createdAt']) &&
-               data.name is string && data.name.size() <= 100 &&
-               data.email is string && data.email.size() <= 100;
-      }
-      allow get: if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId) && isValidUser(incoming());
-      allow update: if isOwner(userId) && isValidUser(incoming()) && 
-                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'region', 'preferredLanguage', 'updatedAt']);
+    // --- Validations ---
+    function isValidQuiz(data) {
+      return data.id is string && data.token is string && data.title is string && data.type in ['quiz', 'plastin'];
     }
 
-    // Categories
-    match /categories/{categoryId} {
-      allow read: if true;
-      allow write: if isAdmin();
+    function isValidSubmission(data) {
+      return data.quizId is string && data.userName is string && data.score is number;
     }
 
-    // Quizzes
+    // --- Collections ---
+    
+    // Quizzes: Creators can create/update their own. Everyone can read to join.
     match /quizzes/{quizId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow create: if isSignedIn(); // Add ownership check in app logic, but let's be loose for now to allow local storage sync
+      allow update, delete: if isAdmin() || (isSignedIn() && existing().authorId == request.auth.uid);
+    }
+
+    // Submissions: Participants can create. Admins and Quiz Authors can read.
+    match /submissions/{submissionId} {
+      allow create: if true; // Allow anonymous submissions if app supports it
+      allow read, list: if isAdmin() || (isSignedIn() && get(/databases/$(database)/documents/quizzes/$(resource.data.quizId)).data.authorId == request.auth.uid);
       
-      match /questions/{questionId} {
-        allow read: if true;
-        allow write: if isAdmin();
-      }
+      // Allow user to see their own if they were signed in
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
-    // Attempts
-    match /attempts/{attemptId} {
-      function isValidAttempt(data) {
-        return data.userId == request.auth.uid &&
-               data.quizId is string &&
-               data.score is number;
-      }
-      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
-      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && isValidAttempt(incoming());
-    }
-
-    // Settings
-    match /config/settings {
-      allow read, write: if isAdmin();
-    }
-
-    // Admins collection (static list for security)
-    match /admins/{userId} {
-      allow read: if isSignedIn();
+    // Lobbies: Sync state for live sessions.
+    match /lobbies/{token} {
+      allow read, write: if true; // Public access for the sync token
     }
   }
 }

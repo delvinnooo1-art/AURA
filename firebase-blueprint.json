@@ -1,111 +1,81 @@
 {
   "entities": {
-    "User": {
-      "title": "User",
-      "description": "App users who take quizzes",
-      "type": "object",
-      "properties": {
-        "uid": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string" },
-        "region": { "type": "string" },
-        "preferredLanguage": { "type": "string" },
-        "role": { "type": "string", "enum": ["user", "admin"] },
-        "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["uid", "name", "email"]
-    },
     "Quiz": {
       "title": "Quiz",
-      "description": "A collection of questions",
+      "description": "Quiz configuration and questions",
       "type": "object",
       "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["quiz", "plastin"] },
+        "token": { "type": "string" },
         "title": { "type": "string" },
         "description": { "type": "string" },
-        "categoryId": { "type": "string" },
-        "difficulty": { "type": "string", "enum": ["easy", "medium", "hard"] },
-        "authorId": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["title", "categoryId", "difficulty"]
-    },
-    "Question": {
-      "title": "Question",
-      "description": "A single quiz question",
-      "type": "object",
-      "properties": {
-        "text": { "type": "string" },
-        "type": { "type": "string", "enum": ["multiple-choice", "analytical", "long-paragraph", "math", "image"] },
         "category": { "type": "string" },
-        "difficulty": { "type": "string" },
-        "options": { "type": "array", "items": { "type": "string" } },
-        "correctAnswer": { "type": "string" },
-        "imageUrl": { "type": "string" },
-        "explanation": { "type": "string" }
+        "durationMode": { "type": "string", "enum": ["fixed", "unlimited"] },
+        "timeLimit": { "type": "number" },
+        "uiMode": { "type": "string", "enum": ["laptop", "mobile", "adaptive"] },
+        "scoringSystem": { "type": "string", "enum": ["point", "score", "weighted"] },
+        "isLiveMode": { "type": "boolean" },
+        "sessionMode": { "type": "string", "enum": ["practice", "live", "exam"] },
+        "startMethod": { "type": "string", "enum": ["manual", "scheduled", "auto"] },
+        "playerLimit": { "type": "number" },
+        "lobbyRules": { "type": "object" },
+        "enableSheetsExport": { "type": "boolean" },
+        "deadlines": { "type": "object" },
+        "questions": { "type": "array" },
+        "plastin": { "type": "object" },
+        "language": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "authorId": { "type": "string" }
       },
-      "required": ["text", "type"]
+      "required": ["id", "token", "title", "type"]
     },
     "Attempt": {
       "title": "Attempt",
-      "description": "A user's quiz attempt",
+      "description": "A user's quiz submission",
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
+        "id": { "type": "string" },
         "quizId": { "type": "string" },
+        "quizTitle": { "type": "string" },
+        "tokenUsed": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
         "score": { "type": "number" },
-        "totalQuestions": { "type": "number" },
-        "completedAt": { "type": "string", "format": "date-time" },
-        "categoryBreakdown": { "type": "object" },
-        "performanceSummary": { "type": "string" }
+        "total": { "type": "number" },
+        "maxScore": { "type": "number" },
+        "scoringType": { "type": "string" },
+        "answers": { "type": "object" },
+        "timeTaken": { "type": "number" },
+        "difficultyMetrics": { "type": "object" },
+        "completedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["userId", "quizId", "score"]
+      "required": ["quizId", "userName", "score"]
     },
-    "Category": {
-      "title": "Category",
-      "description": "Quiz categories",
+    "Lobby": {
+      "title": "Lobby",
+      "description": "Live session state",
       "type": "object",
       "properties": {
-        "name": { "type": "string" },
-        "slug": { "type": "string" }
-      },
-      "required": ["name"]
-    },
-    "Settings": {
-      "title": "Settings",
-      "description": "Global application settings",
-      "type": "object",
-      "properties": {
-        "translationApiKey": { "type": "string" },
-        "supportedLanguages": { "type": "array", "items": { "type": "string" } },
-        "autoTranslationEnabled": { "type": "boolean" }
+        "status": { "type": "string", "enum": ["waiting", "started", "finished"] },
+        "currentQuestionIndex": { "type": "number" },
+        "players": { "type": "object" },
+        "startTime": { "type": "string", "format": "date-time" }
       }
     }
   },
   "firestore": {
-    "/users/{userId}": {
-      "schema": "User",
-      "description": "User profiles"
-    },
     "/quizzes/{quizId}": {
       "schema": "Quiz",
-      "description": "Quiz data"
+      "description": "Master quiz definitions"
     },
-    "/quizzes/{quizId}/questions/{questionId}": {
-      "schema": "Question",
-      "description": "Questions within a quiz"
-    },
-    "/attempts/{attemptId}": {
+    "/submissions/{submissionId}": {
       "schema": "Attempt",
-      "description": "Quiz attempt records"
+      "description": "User submissions and results"
     },
-    "/categories/{categoryId}": {
-      "schema": "Category",
-      "description": "Available categories"
-    },
-    "/config/settings": {
-      "schema": "Settings",
-      "description": "Admin settings"
+    "/lobbies/{token}": {
+      "schema": "Lobby",
+      "description": "Real-time lobby states"
     }
   }
 }
